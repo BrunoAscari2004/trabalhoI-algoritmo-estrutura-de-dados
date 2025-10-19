@@ -606,95 +606,130 @@ void inserirPedido(Pedido pedido) {
     construirIndicePedidos();
 }
 
+
+//Remoção por blocos para evitar colocar tudo em RAM
 void removerProduto(Produto produto){
-
-    //encontrar a posição do produto no arquivo(se existir), depois copiar todo o arquivo para outro sem o registro a ser deletado
+    // 1) Descobre onde está o registro no arquivo (offset em bytes)
     long long offset = pesquisa(produto.id);
+    if (offset == -1) return; // não achou: a própria pesquisa já imprime msg
 
+    // 2) Abre o arquivo original para leitura binária
+    FILE *orig = fopen(PRODFILE, "rb");
+    if (!orig) { printf("Erro abrindo %s\n", PRODFILE); return; }
 
-    if(offset == -1)
-        return; // a pesquisa já exibe mensagem de não encontrado
+    // 3) Cria um arquivo temporário que será a "cópia sem o registro"
+    FILE *temp = fopen("temp.bin", "wb");
+    if (!temp) { printf("Erro criando temp.bin\n"); fclose(orig); return; }
 
-    FILE *arqOriginal = fopen(PRODFILE, "rb");
-    fseek(arqOriginal,0,SEEK_END);
+    // 4) Mede o tamanho total do arquivo para saber até onde copiar
+    fseek(orig, 0, SEEK_END);
+    long long filesize = (long long) ftell(orig);
 
-    long filesize = ftell(arqOriginal);
-    int posicao = offset/sizeof(Produto);
+    // Quantidade de bytes ANTES do registro a excluir (copiaremos para o temp)
+    long long bytes_before = offset;
+    // Quantidade de bytes DEPOIS do registro (não precisamos calcular, copiamos até EOF)
+    long long bytes_after  = filesize - (offset + (long long)sizeof(Produto)); // (informativo)
 
-    fseek(arqOriginal,0,SEEK_SET);
-    
-    FILE *novo = fopen("temp.bin","wb");
+    // 5) Volta para o início para começar a copiar a parte "antes"
+    fseek(orig, 0, SEEK_SET);
 
-    char *bufferInicio = (char *)malloc(offset); //buffer para armazenar todos os dados antes do registro
+    // 6) Buffer fixo e pequeno: evita alocar o arquivo todo na RAM
+    char buf[64 * 1024];
+    size_t n;
 
-    char *bufferFim = (char *)malloc(filesize - (offset + sizeof(Produto))); //buffer para armazenar todos os dados depois do registro
-    
-    fread(bufferInicio,1,offset,arqOriginal);
-    fseek(arqOriginal,sizeof(Produto),SEEK_CUR); //Pula o registro a ser deletado
-    fread(bufferFim,1,filesize - (offset + sizeof(Produto)),arqOriginal);
+    // 7) Copia os bytes do início até o início do registro (região [0, offset))
+    while (bytes_before > 0) {
+        // lê em blocos de até 64 KB (ou o que faltar)
+        size_t chunk = (size_t)(bytes_before > (long long)sizeof(buf) ? sizeof(buf) : bytes_before);
+        n = fread(buf, 1, chunk, orig);
+        if (n == 0) break;           // EOF ou erro de leitura
+        fwrite(buf, 1, n, temp);
+        bytes_before -= (long long)n;
+    }
 
-    printf("%s", bufferInicio);
+    // 8) "Pula" o registro a ser removido (avança o ponteiro do arquivo original)
+    fseek(orig, offset + (long long)sizeof(Produto), SEEK_SET);
 
-    fwrite(bufferInicio,1,offset,novo);
-    fwrite(bufferFim,1,filesize - (offset + sizeof(Produto)),novo);
+    // 9) Copia o restante do arquivo (do byte seguinte ao registro até o EOF)
+    while ((n = fread(buf, 1, sizeof(buf), orig)) > 0) {
+        fwrite(buf, 1, n, temp);
+    }
 
-    fclose(arqOriginal);
-    fclose(novo);
+    // 10) Fecha arquivos
+    fclose(orig);
+    fclose(temp);
 
+    // 11) Substitui o original pelo temporário (remoção efetiva)
     remove(PRODFILE);
-    rename("temp.bin",PRODFILE);
+    rename("temp.bin", PRODFILE);
 
-    printf("\nRegistro deletado com sucesso");
-    free(bufferFim);
-    free(bufferInicio);
-    construirIndiceProdutos(); 
+    printf("\nRegistro deletado com sucesso\n");
 
+    // 12) Reconstrói o índice porque os offsets mudaram
+    construirIndiceProdutos();
 }
+
 
 void removerPedido(Pedido pedido){
-
-    //encontrar a posição do produto no arquivo(se existir), depois copiar todo o arquivo para outro sem o registro a ser deletado
+    // 1) Acha o offset do pedido pelo ID (arquivo está ordenado)
     long long offset = pesquisa_pedido(pedido.id);
+    if (offset == -1) return; // não encontrado
 
+    // 2) Abre o arquivo original (somente leitura)
+    FILE *orig = fopen(ORDERFILE, "rb");
+    if (!orig) { printf("Erro abrindo %s\n", ORDERFILE); return; }
 
-    if(offset == -1)
-        return; // a pesquisa já exibe mensagem de não encontrado
+    // 3) Cria o arquivo temporário (escrita)
+    FILE *temp = fopen("temp.bin", "wb");
+    if (!temp) { printf("Erro criando temp.bin\n"); fclose(orig); return; }
 
-    FILE *arqOriginal = fopen(ORDERFILE, "rb");
-    fseek(arqOriginal,0,SEEK_END);
+    // 4) Mede o tamanho total do arquivo
+    fseek(orig, 0, SEEK_END);
+    long long filesize = (long long) ftell(orig);
 
-    long filesize = ftell(arqOriginal);
-    int posicao = offset/sizeof(Pedido);
+    // Bytes ANTES do registro a remover
+    long long bytes_before = offset;
+    // Bytes DEPOIS do registro (não precisamos usar explicitamente)
+    long long bytes_after  = filesize - (offset + (long long)sizeof(Pedido)); // (informativo)
 
-    fseek(arqOriginal,0,SEEK_SET);
-    
-    FILE *novo = fopen("temp.bin","wb");
+    // 5) Volta ao início para copiar a parte anterior
+    fseek(orig, 0, SEEK_SET);
 
-    char *bufferInicio = (char *)malloc(offset); //buffer para armazenar todos os dados antes do registro
+    // 6) Buffer fixo para copiar em blocos
+    char buf[64 * 1024];
+    size_t n;
 
-    char *bufferFim = (char *)malloc(filesize - (offset + sizeof(Pedido))); //buffer para armazenar todos os dados depois do registro
-    
-    fread(bufferInicio,1,offset,arqOriginal);
-    fseek(arqOriginal,sizeof(Pedido),SEEK_CUR); //Pula o registro a ser deletado
-    fread(bufferFim,1,filesize - (offset + sizeof(Pedido)),arqOriginal);
+    // 7) Copia [0 .. offset)
+    while (bytes_before > 0) {
+        size_t chunk = (size_t)(bytes_before > (long long)sizeof(buf) ? sizeof(buf) : bytes_before);
+        n = fread(buf, 1, chunk, orig);
+        if (n == 0) break;
+        fwrite(buf, 1, n, temp);
+        bytes_before -= (long long)n;
+    }
 
-    printf("%s", bufferInicio);
+    // 8) Pula o registro alvo
+    fseek(orig, offset + (long long)sizeof(Pedido), SEEK_SET);
 
-    fwrite(bufferInicio,1,offset,novo);
-    fwrite(bufferFim,1,filesize - (offset + sizeof(Pedido)),novo);
+    // 9) Copia o restante até o fim
+    while ((n = fread(buf, 1, sizeof(buf), orig)) > 0) {
+        fwrite(buf, 1, n, temp);
+    }
 
-    fclose(arqOriginal);
-    fclose(novo);
+    // 10) Fecha arquivos
+    fclose(orig);
+    fclose(temp);
 
+    // 11) Substitui o original pelo temporário
     remove(ORDERFILE);
-    rename("temp.bin",ORDERFILE);
+    rename("temp.bin", ORDERFILE);
 
-    printf("\nRegistro deletado com sucesso");
-    free(bufferFim);
-    free(bufferInicio);
+    printf("\nRegistro deletado com sucesso\n");
+
+    // 12) Reconstrói o índice de pedidos
     construirIndicePedidos();
-
 }
+
 
 void limpar_buffer() {
     int c;
