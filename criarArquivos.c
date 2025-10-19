@@ -228,9 +228,7 @@ int main(){
     while(fgets(buffer, MAX_LINHA, produtoscsv) != NULL){
         Produto prod = processar_linha(buffer);
         salvar_produto(produtosbin, &prod);
-        count++;
-        if(count == 50)
-            break;
+        count++; 
     }
 
 
@@ -254,9 +252,7 @@ int main(){
 
         printf("\n%lld - %lld - %s\n", ped.id, ped.id_produto, ped.data);
         salvar_pedido(pedidosbin, &ped);
-        countPed++;
-        if(countPed == 50)
-            break;
+        countPed++; 
     }
 
     fclose(pedidosbin);
